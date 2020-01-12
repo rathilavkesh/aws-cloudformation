@@ -10,58 +10,57 @@ Parameters:
     MaxLength: 255
     AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
     Default: "MyFirstApp-Network"
-  AppServerKeyPair:
-    Description: "Key pair for ssh into app server"
+  WebServerKeyPair:
+    Description: "Key pair for ssh into web server"
     Type: String
     Default: "sneha-keypair"
 
 # This CloudFormation template deploys application server.
 Resources:
-  AppServer:
-    Type: AWS::EC2::Instance
+  WebServerLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
+      LaunchConfigurationName: app-server-launch-config
+      AssociatePublicIpAddress: true
       ImageId: ami-062f7200baf2fa504
       InstanceType: t2.micro
-      KeyName: !Ref "AppServerKeyPair"
+      KeyName: !Ref WebServerKeyPair
+      SecurityGroups:
+        - Fn::ImportValue: !Sub "${NetworkStackName}-WebServerSecurityGroup"
       UserData:
         Fn::Base64:
           !Sub |
-            #!/bin/bash -ex
-            yum update -y
-            yum install -y httpd
-            cd /var/www/html
-            echo "<html>I love YAML CloudFormation!!</html>" > /var/www/html/app.html
-            chmod 755 app.html
-            service httpd start
-            chkconfig httpd on
-      NetworkInterfaces:
-        - AssociatePublicIpAddress: true
-          DeviceIndex: "0"
-          GroupSet:
-            - Fn::ImportValue: !Sub "${NetworkStackName}-WebServerSecurityGroup"
-          SubnetId:
-            Fn::Select:
-              - 0
-              - Fn::Split:
-                  - ","
-                  - Fn::ImportValue: !Sub "${NetworkStackName}-PublicSubnets"
+          #!/bin/bash -ex
+          yum update -y
+          yum install -y httpd
+          cd /var/www/html
+          echo "<html>I love YAML CloudFormation!!</html>" > /var/www/html/app.html
+          chmod 755 app.html
+          service httpd start
+          chkconfig httpd on
+  WebServerAutoscalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: app-server-asg
+      LaunchConfigurationName: !Ref WebServerLaunchConfiguration
+      MinSize: "1"
+      MaxSize: "1"
+      DesiredCapacity: "1"
+      VPCZoneIdentifier:
+        Fn::Split:
+          - ","
+          - Fn::ImportValue: !Sub "${NetworkStackName}-PublicSubnets"
       Tags:
         - Key: Name
-          Value: !Join ['', [!Ref "AWS::StackName", "-WebServer" ]]
-
+          Value: !Sub "${AWS::StackName}-WebServer"
+          PropagateAtLaunch: "true"
 #######################################################################################
 # Output
 #######################################################################################
 Outputs:
-  URL:
-    Description: "URL of the sample website"
-    Value:
-      Fn::Join:
-        - ''
-        - - "http://"
-          - Fn::GetAtt:
-              - AppServer
-              - PublicDnsName
-          - "/app.html"
-    Export:
-      Name: !Sub "${AWS::StackName}-URL"
+  WebServerLaunchConfiguration:
+    Description: "Web server launcg configuration"
+    Value: !Ref WebServerLaunchConfiguration
+  WebServerAutoscalingGroup:
+    Description: "Web server auto scaling group"
+    Value: !Ref WebServerAutoscalingGroup
