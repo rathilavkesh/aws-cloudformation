@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: 2010-09-09
+#######################################################################################
+# Application Parameter
+#######################################################################################
+Parameters:
+  NetworkStackName:
+    Description: "Name of an active CloudFormation stack that contains the networking resources, such as the subnet and security group, that will be used in this stack."
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+    Default: "MyFirstApp-Network"
+  AppServerKeyPair:
+    Description: "Key pair for ssh into app server"
+    Type: String
+    Default: "sneha-keypair"
+
+# This CloudFormation template deploys application server.
+Resources:
+  AppServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-062f7200baf2fa504
+      InstanceType: t2.micro
+      KeyName: !Ref "AppServerKeyPair"
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash -ex
+            yum update -y
+            yum install -y httpd
+            cd /var/www/html
+            echo "<html>I love YAML CloudFormation!!</html>" > /var/www/html/app.html
+            chmod 755 app.html
+            service httpd start
+            chkconfig httpd on
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: "0"
+          GroupSet:
+            - Fn::ImportValue: !Sub "${NetworkStackName}-WebServerSecurityGroup"
+          SubnetId:
+            Fn::Select:
+              - 0
+              - Fn::Split:
+                  - ","
+                  - Fn::ImportValue: !Sub "${NetworkStackName}-PublicSubnets"
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-WebServer" ]]
+
+#######################################################################################
+# Output
+#######################################################################################
+Outputs:
+  URL:
+    Description: "URL of the sample website"
+    Value:
+      Fn::Join:
+        - ''
+        - - "http://"
+          - Fn::GetAtt:
+              - AppServer
+              - PublicDnsName
+          - "/app.html"
+    Export:
+      Name: !Sub "${AWS::StackName}-URL"

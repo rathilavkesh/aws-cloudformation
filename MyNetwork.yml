@@ -126,6 +126,26 @@ Resources:
     Properties:
       SubnetId: !Ref PrivateSubnetB
       RouteTableId: !Ref PrivateRouteTable
+  #######################################################################################
+  # Web server security group
+  #######################################################################################
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP ingress
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-AppServer-SG
 
 #######################################################################################
 # Output
@@ -150,3 +170,8 @@ Outputs:
       - [ !Ref PrivateSubnetA, !Ref PrivateSubnetB ]
     Export:
       Name: !Sub "${AWS::StackName}-PrivateSubnets"
+  WebServerSecurityGroup:
+    Description: Web server security group
+    Value: !Ref WebServerSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-WebServerSecurityGroup"
