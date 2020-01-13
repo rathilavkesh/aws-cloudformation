@@ -17,11 +17,63 @@ Parameters:
 
 # This CloudFormation template deploys application server.
 Resources:
+  PublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets:
+        Fn::Split:
+          - ","
+          - Fn::ImportValue: !Sub "${NetworkStackName}-PublicSubnets"
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: 50
+      SecurityGroups:
+        - Fn::ImportValue: !Sub "${NetworkStackName}-LoadBalancerSecurityGroup"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-LoadBalancer"
+  WebServerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebServerTargetGroup
+      LoadBalancerArn: !Ref PublicLoadBalancer
+      Port: 80
+      Protocol: HTTP
+  WebServerListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref WebServerTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "*"
+      ListenerArn: !Ref WebServerListener
+      Priority: 1
+  WebServerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: WebServerTargetGroup
+      Port: 80
+      Protocol: HTTP
+      HealthCheckPath: /app.html
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 20
+      VpcId:
+        Fn::ImportValue: !Sub "${NetworkStackName}-VPCID"
   WebServerLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      LaunchConfigurationName: app-server-launch-config
-      AssociatePublicIpAddress: true
+      LaunchConfigurationName: !Sub "${AWS::StackName}-AppServer-LC"
+#      AssociatePublicIpAddress: true
       ImageId: ami-062f7200baf2fa504
       InstanceType: t2.micro
       KeyName: !Ref WebServerKeyPair
@@ -41,15 +93,17 @@ Resources:
   WebServerAutoscalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
-      AutoScalingGroupName: app-server-asg
+      AutoScalingGroupName: !Sub "${AWS::StackName}-WebServer-ASG"
       LaunchConfigurationName: !Ref WebServerLaunchConfiguration
       MinSize: "1"
       MaxSize: "1"
       DesiredCapacity: "1"
+      TargetGroupARNs:
+        - !Ref WebServerTargetGroup
       VPCZoneIdentifier:
         Fn::Split:
           - ","
-          - Fn::ImportValue: !Sub "${NetworkStackName}-PublicSubnets"
+          - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnets"
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-WebServer"
@@ -64,3 +118,6 @@ Outputs:
   WebServerAutoscalingGroup:
     Description: "Web server auto scaling group"
     Value: !Ref WebServerAutoscalingGroup
+  WebServerLoadBalancerDNSName:
+    Description: "Web server URL"
+    Value: !Join ['', ["http://", !GetAtt PublicLoadBalancer.DNSName, "/app.html" ]]

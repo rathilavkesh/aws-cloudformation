@@ -1,4 +1,22 @@
 AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  Application:
+    Description: "Name of an active CloudFormation stack that contains the networking resources, such as the subnet and security group, that will be used in this stack."
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+    Default: "MyFirstApp"
+  NatInstanceKeyPair:
+    Description: "Key pair for ssh into nat instance"
+    Type: String
+    Default: "sneha-keypair"
+
+Mappings:
+  PropertyMap:
+    VPC:
+      CidrBlock: 10.1.0.0/16
+
 # This CloudFormation template deploys a basic VPC / Network.
 Resources:
   #######################################################################################
@@ -7,12 +25,12 @@ Resources:
   VPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 10.1.0.0/16
+      CidrBlock: !FindInMap [ PropertyMap, VPC, CidrBlock ]
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
         - Key: Name
-          Value: !Join ['', [!Ref "AWS::StackName", "-VPC" ]]
+          Value: !Join ['', [!Ref "Application", "-VPC" ]]
   # Our VPC will need internet access:
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -30,13 +48,14 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: 10.1.10.0/24
+      CidrBlock: !Select [ 0, !Cidr [ !GetAtt VPC.CidrBlock, 4, 8 ]]
+      MapPublicIpOnLaunch: true
       AvailabilityZone: !Select
         - 0
         - !GetAZs
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName}-Public-A
+          Value: !Sub ${Application}-Public-A
   #######################################################################################
   # Public Subnet B
   #######################################################################################
@@ -44,13 +63,14 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: 10.1.20.0/24
+      CidrBlock: !Select [ 1, !Cidr [ !GetAtt VPC.CidrBlock, 4, 8 ]]
+      MapPublicIpOnLaunch: true
       AvailabilityZone: !Select
         - 1
         - !GetAZs
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName}-Public-B
+          Value: !Sub ${Application}-Public-B
   #######################################################################################
   # Private Subnet A
   #######################################################################################
@@ -58,13 +78,13 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: 10.1.30.0/24
+      CidrBlock: !Select [ 2, !Cidr [ !GetAtt VPC.CidrBlock, 4, 8 ]]
       AvailabilityZone: !Select
         - 0
         - !GetAZs
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName}-Private-A
+          Value: !Sub ${Application}-Private-A
   #######################################################################################
   # Private Subnet B
   #######################################################################################
@@ -72,13 +92,13 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: 10.1.40.0/24
+      CidrBlock: !Select [ 3, !Cidr [ !GetAtt VPC.CidrBlock, 4, 8 ]]
       AvailabilityZone: !Select
         - 1
         - !GetAZs
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName}-Private-B
+          Value: !Sub ${Application}-Private-B
   #######################################################################################
   # Public Route Table
   #######################################################################################
@@ -88,19 +108,22 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName}-Public-RT
-  PublicRoute1:
+          Value: !Sub ${Application}-Public-RT
+
+  InternetRoute:
     Type: AWS::EC2::Route
     DependsOn: GatewayToInternet
     Properties:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
+
   PublicSubnetARouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnetA
       RouteTableId: !Ref PublicRouteTable
+
   PublicSubnetBRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -111,21 +134,47 @@ Resources:
   #######################################################################################
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
+    DependsOn: NatInstance
     Properties:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName}-Private-RT
+          Value: !Sub ${Application}-Private-RT
+
+  NatInstanceRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId: !Ref NatInstance
+
   PrivateSubnetARouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnetA
       RouteTableId: !Ref PrivateRouteTable
+
   PrivateSubnetBRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnetB
       RouteTableId: !Ref PrivateRouteTable
+  #######################################################################################
+  # Web server security group
+  #######################################################################################
+  WebAppLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Internet facing LoadBalancer security group
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-WebAppLoadBalancer-SG
   #######################################################################################
   # Web server security group
   #######################################################################################
@@ -138,15 +187,58 @@ Resources:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          CidrIp: 0.0.0.0/0
+          SourceSecurityGroupId: !Ref WebAppLoadBalancerSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !GetAtt VPC.CidrBlock
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-WebServer-SG
+
+  #######################################################################################
+  # Web server security group
+  #######################################################################################
+  NatInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP ingress
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
           CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName}-AppServer-SG
+          Value: !Sub ${Application}-NatInstance-SG
 
+  #######################################################################################
+  # Nat Instance
+  #######################################################################################
+  NatInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - PublicSubnetA
+      - PublicSubnetB
+      - PrivateSubnetA
+      - PrivateSubnetB
+      - InternetGateway
+    Properties:
+      ImageId: ami-00a9d4a05375b2763
+      InstanceType: t2.micro
+      SourceDestCheck: false
+      SubnetId: !Ref PublicSubnetA
+      KeyName: !Ref NatInstanceKeyPair
+      SecurityGroupIds:
+        - !Ref NatInstanceSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-NatInstance
 #######################################################################################
 # Output
 #######################################################################################
@@ -170,6 +262,11 @@ Outputs:
       - [ !Ref PrivateSubnetA, !Ref PrivateSubnetB ]
     Export:
       Name: !Sub "${AWS::StackName}-PrivateSubnets"
+  LoadBalancerSecurityGroup:
+    Description: Public load balancer security group
+    Value: !Ref WebAppLoadBalancerSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerSecurityGroup"
   WebServerSecurityGroup:
     Description: Web server security group
     Value: !Ref WebServerSecurityGroup
