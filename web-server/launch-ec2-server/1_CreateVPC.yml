@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  Application:
+    Description: "Name of an active CloudFormation stack that contains the networking resources, such as the subnet and security group, that will be used in this stack."
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+    Default: "MyFirstApp"
+
+Mappings:
+  PropertyMap:
+    VPC:
+      CidrBlock: 10.1.0.0/16
+
+# This CloudFormation template deploys a basic VPC / Network.
+Resources:
+  #######################################################################################
+  # First, a VPC:
+  #######################################################################################
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [ PropertyMap, VPC, CidrBlock ]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "Application", "-VPC" ]]
+  # Our VPC will need internet access:
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    # Notice how you can't attach an IGW to a VPC unless both are created:
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  #######################################################################################
+  # Public Subnet A
+  #######################################################################################
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [ 0, !Cidr [ !GetAtt VPC.CidrBlock, 2, 8 ]]
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-Public-A
+  #######################################################################################
+  # Public Subnet B
+  #######################################################################################
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [ 1, !Cidr [ !GetAtt VPC.CidrBlock, 2, 8 ]]
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-Public-B
+  #######################################################################################
+  # Public Route Table
+  #######################################################################################
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-Public-RT
+
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayToInternet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+  #######################################################################################
+  # Web server security group
+  #######################################################################################
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP ingress
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${Application}-WebServer-SG
+#######################################################################################
+# Output
+#######################################################################################
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${Application}-VPCID"
+  PublicSubnets:
+    Description: Public subnets used by cluster
+    Value: !Join
+      - ","
+      - [ !Ref PublicSubnetA, !Ref PublicSubnetB ]
+    Export:
+      Name: !Sub "${Application}-PublicSubnets"
+  WebServerSecurityGroup:
+    Description: Web server security group
+    Value: !Ref WebServerSecurityGroup
+    Export:
+      Name: !Sub "${Application}-WebServerSecurityGroup"

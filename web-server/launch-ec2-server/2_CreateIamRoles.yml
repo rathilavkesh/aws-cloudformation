@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  ApplicationName:
+    Description: "This is application name for which we are creating iam roles."
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+    Default: "MyFirstApp"
+  Environment:
+    Description: "This is application environment"
+    Type: String
+    Default: "test"
+
+# This CloudFormation template create iam roles for server.
+Resources:
+  WebServerRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-WebServerRole"
+        - Key: ApplicationName
+          Value: !Sub "${ApplicationName}"
+        - Key: Environment
+          Value: !Sub "${Environment}"
+  WebServerInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: "/"
+      Roles:
+        - Ref: "WebServerRole"
+  WebServerPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: WebServerPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - "ec2:AllocateAddress"
+              - "ec2:AssociateAddress"
+              - "ec2:DescribeAddresses"
+              - "ec2:DisassociateAddress"
+              - "ec2:ReleaseAddress"
+            Resource: '*'
+      Roles:
+        - Ref: "WebServerRole"
+
+#######################################################################################
+# Output
+#######################################################################################
+Outputs:
+  WebServerInstanceProfile:
+    Description: Web server instance profile
+    Value: !Ref WebServerInstanceProfile
+    Export:
+      Name: !Sub "${ApplicationName}-WebServerInstanceProfile"

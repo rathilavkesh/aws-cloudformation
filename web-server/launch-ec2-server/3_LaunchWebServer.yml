@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: 2010-09-09
+#######################################################################################
+# Application Parameter
+#######################################################################################
+Parameters:
+  ApplicationName:
+    Description: "This is application name"
+    Type: String
+    Default: "MyFirstApp"
+  Environment:
+    Description: "This is application environment"
+    Type: String
+    Default: "test"
+  WebServerKeyPair:
+    Description: "Key pair for ssh into web server"
+    Type: String
+    Default: "sneha-keypair"
+
+# This CloudFormation template deploys application server.
+Resources:
+  WebServerIPAddress:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-WebServerIP"
+        - Key: ApplicationName
+          Value: !Sub "${ApplicationName}"
+        - Key: Environment
+          Value: !Sub "${Environment}"
+  WebServerLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn: WebServerIPAddress
+    Properties:
+      LaunchConfigurationName: !Sub "${AWS::StackName}-AppServer-LC"
+      AssociatePublicIpAddress: true
+      ImageId: ami-062f7200baf2fa504
+      InstanceType: t2.micro
+      KeyName: !Ref WebServerKeyPair
+      IamInstanceProfile:
+        Fn::ImportValue: !Sub "${ApplicationName}-WebServerInstanceProfile"
+      SecurityGroups:
+        - Fn::ImportValue: !Sub "${ApplicationName}-WebServerSecurityGroup"
+      UserData:
+        Fn::Base64:
+          !Sub |
+          #!/bin/bash -ex
+
+          # Update software and install httpd
+          yum update -y
+          yum install -y httpd
+
+          # AWS Version
+          aws --version
+
+          # Determine and set region
+          EC2_AVAIL_ZONE=`curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone`
+          echo EC2_AVAIL_ZONE = $EC2_AVAIL_ZONE
+          EC2_REGION="`echo \"$EC2_AVAIL_ZONE\" | sed -e 's:\([0-9][0-9]*\)[a-z]*\$:\\1:'`"
+          echo EC2_REGION = $EC2_REGION
+          aws configure set region $EC2_REGION
+
+          # Determine Instance ID
+          INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+          echo INSTANCE_ID = $INSTANCE_ID
+
+          # Set the allocated Elastic IP here
+          ELASTIC_IP=$(aws ec2 describe-addresses --filters "Name=domain,Values=vpc" --filters "Name=tag:ApplicationName,Values=${ApplicationName}" --filters "Name=tag:Environment,Values=${Environment}" --query "Addresses[?AssociationId==null][AllocationId]" --output text | head -n1)
+          echo ELASTIC_IP = $ELASTIC_IP
+
+          # Associate Elastic IP
+          aws ec2 associate-address --instance-id $INSTANCE_ID --allocation-id $ELASTIC_IP --allow-reassociation
+
+          cd /var/www/html
+          echo "<html>I love YAML CloudFormation!!</html>" > /var/www/html/app.html
+          chmod 755 app.html
+          service httpd start
+          chkconfig httpd on
+  WebServerAutoscalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${AWS::StackName}-WebServer-ASG"
+      LaunchConfigurationName: !Ref WebServerLaunchConfiguration
+      MinSize: "1"
+      MaxSize: "1"
+      DesiredCapacity: "1"
+      VPCZoneIdentifier:
+        Fn::Split:
+          - ","
+          - Fn::ImportValue: !Sub "${ApplicationName}-PublicSubnets"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-WebServer"
+          PropagateAtLaunch: true
+        - Key: ApplicationName
+          Value: !Sub "${ApplicationName}"
+          PropagateAtLaunch: true
+        - Key: Environment
+          Value: !Sub "${Environment}"
+          PropagateAtLaunch: true
+#######################################################################################
+# Output
+#######################################################################################
+Outputs:
+  WebServerLaunchConfiguration:
+    Description: "Web server launcg configuration"
+    Value: !Ref WebServerLaunchConfiguration
+  WebServerAutoscalingGroup:
+    Description: "Web server auto scaling group"
+    Value: !Ref WebServerAutoscalingGroup
+  WebServerLoadBalancerDNSName:
+    Description: "Web server URL"
+    Value: !Join ['', ["http://", !Ref WebServerIPAddress, "/app.html" ]]
